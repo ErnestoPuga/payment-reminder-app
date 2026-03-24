@@ -130,7 +130,7 @@ export async function GET() {
       `
 
       const response = await resend.emails.send({
-        from: 'Recordatorios <notificaciones@TUDOMINIO.com>',
+        from: 'Recordatorios <notificaciones@hpxpert.com>',
         to: bill.notification_email,
         subject,
         html,
