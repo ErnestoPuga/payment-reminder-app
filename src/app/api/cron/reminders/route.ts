@@ -127,7 +127,7 @@ export async function GET() {
         `
 
       const response = await resend.emails.send({
-        from: 'onboarding@resend.dev',
+        from: 'info@hpxpert.com',
         to: bill.notification_email,
         subject,
         html,
