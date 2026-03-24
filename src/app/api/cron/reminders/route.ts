@@ -42,6 +42,17 @@ function diffInDays(dateA: Date, dateB: Date) {
 
 export async function GET() {
   try {
+    const resendApiKey = process.env.RESEND_API_KEY
+
+    if (!resendApiKey) {
+      return NextResponse.json(
+        { error: 'Falta RESEND_API_KEY en variables de entorno' },
+        { status: 500 }
+      )
+    }
+
+    const resend = new Resend(resendApiKey)
+
     const mexicoToday = getMexicoTodayParts()
     const today = new Date(mexicoToday.year, mexicoToday.month - 1, mexicoToday.day)
 
@@ -57,6 +68,7 @@ export async function GET() {
 
     const sent: string[] = []
     const skipped: string[] = []
+    const debug: any[] = []
 
     for (const bill of bills || []) {
       const [year, month, day] = bill.due_date.split('-').map(Number)
@@ -67,20 +79,23 @@ export async function GET() {
       const shouldSendToday = diffDays === 0
       const shouldSendBefore = diffDays === Number(bill.reminder_days_before)
 
-      console.log('-----')
-      console.log('Bill:', bill.title)
-      console.log('due_date:', bill.due_date)
-      console.log('reminder_days_before:', bill.reminder_days_before)
-      console.log('today Mexico:', mexicoToday.dateString)
-      console.log('diffDays:', diffDays)
-      console.log('shouldSendToday:', shouldSendToday)
-      console.log('shouldSendBefore:', shouldSendBefore)
+      const notificationType = shouldSendToday ? 'today' : 'before'
+
+      debug.push({
+        title: bill.title,
+        status: bill.status,
+        due_date: bill.due_date,
+        reminder_days_before: bill.reminder_days_before,
+        notification_email: bill.notification_email,
+        mexicoToday: mexicoToday.dateString,
+        diffDays,
+        shouldSendToday,
+        shouldSendBefore,
+      })
 
       if (!shouldSendToday && !shouldSendBefore) {
         continue
       }
-
-      const notificationType = shouldSendToday ? 'today' : 'before'
 
       const { data: existingLogs, error: logError } = await supabase
         .from('notification_log')
@@ -96,7 +111,6 @@ export async function GET() {
       }
 
       if (existingLogs && existingLogs.length > 0) {
-        console.log(`Ya se envió hoy para ${bill.title}, se omite`)
         skipped.push(bill.title)
         continue
       }
@@ -105,32 +119,26 @@ export async function GET() {
         ? `Tu pago vence hoy: ${bill.title}`
         : `Tu pago vence en ${bill.reminder_days_before} día(s): ${bill.title}`
 
-      const html = shouldSendToday
-        ? `
-          <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-            <h2>Recordatorio de pago</h2>
-            <p>Tu pago <strong>${bill.title}</strong> vence hoy.</p>
-            <p><strong>Monto:</strong> $${bill.amount}</p>
-            <p><strong>Fecha de vencimiento:</strong> ${bill.due_date}</p>
-            ${bill.notes ? `<p><strong>Notas:</strong> ${bill.notes}</p>` : ''}
-          </div>
-        `
-        : `
-          <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-            <h2>Recordatorio de pago</h2>
-            <p>Tu pago <strong>${bill.title}</strong> vence pronto.</p>
-            <p><strong>Monto:</strong> $${bill.amount}</p>
-            <p><strong>Fecha de vencimiento:</strong> ${bill.due_date}</p>
-            <p>Faltan ${bill.reminder_days_before} día(s).</p>
-            ${bill.notes ? `<p><strong>Notas:</strong> ${bill.notes}</p>` : ''}
-          </div>
-        `
+      const html = `
+        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+          <h2>Recordatorio de pago</h2>
+          <p><strong>${bill.title}</strong></p>
+          <p><strong>Monto:</strong> $${bill.amount}</p>
+          <p><strong>Fecha de vencimiento:</strong> ${bill.due_date}</p>
+          ${bill.notes ? `<p><strong>Notas:</strong> ${bill.notes}</p>` : ''}
+        </div>
+      `
 
       const response = await resend.emails.send({
-        from: 'info@hpxpert.com',
+        from: 'Recordatorios <notificaciones@TUDOMINIO.com>',
         to: bill.notification_email,
         subject,
         html,
+      })
+
+      debug.push({
+        title: bill.title,
+        resendResponse: response,
       })
 
       if (response.error) {
@@ -138,24 +146,14 @@ export async function GET() {
         continue
       }
 
-      const { error: insertLogError } = await supabase
-        .from('notification_log')
-        .insert([
-          {
-            bill_id: bill.id,
-            type: notificationType,
-          },
-        ])
-
-      if (insertLogError) {
-        console.error(
-          `Correo enviado pero no se pudo guardar log para ${bill.title}:`,
-          insertLogError
-        )
-      }
+      await supabase.from('notification_log').insert([
+        {
+          bill_id: bill.id,
+          type: notificationType,
+        },
+      ])
 
       sent.push(bill.title)
-      console.log(`Correo enviado correctamente para ${bill.title}`)
     }
 
     return NextResponse.json({
@@ -164,6 +162,7 @@ export async function GET() {
       sent,
       skipped,
       mexicoToday: mexicoToday.dateString,
+      debug,
     })
   } catch (err) {
     console.error('Error interno:', err)
